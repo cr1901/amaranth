@@ -11,8 +11,9 @@ __all__ = ["PyCoroProcess"]
 
 
 class PyCoroProcess(Process):
-    def __init__(self, state, domains, constructor, *, default_cmd=None):
+    def __init__(self, state, timeline, domains, constructor, *, default_cmd=None):
         self.state = state
+        self.timeline = timeline
         self.domains = domains
         self.constructor = constructor
         self.default_cmd = default_cmd
@@ -88,11 +89,11 @@ class PyCoroProcess(Process):
                     return
 
                 elif type(command) is Settle:
-                    self.state.timeline.delay(None, self)
+                    self.timeline.delay(None, self)
                     return
 
                 elif type(command) is Delay:
-                    self.state.timeline.delay(command.interval, self)
+                    self.timeline.delay(command.interval, self)
                     return
 
                 elif type(command) is Passive:

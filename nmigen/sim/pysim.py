@@ -1,10 +1,8 @@
 from contextlib import contextmanager
 import itertools
-import inspect
 from vcd import VCDWriter
 from vcd.gtkw import GTKWSave
 
-from .._utils import deprecated
 from ..hdl import *
 from ..hdl.ast import SignalDict
 from ._cmds import *
@@ -190,13 +188,11 @@ class _SignalState:
 
 class _SimulatorState:
     def __init__(self):
-        self.timeline = Timeline()
-        self.signals  = SignalDict()
-        self.slots    = []
-        self.pending  = set()
+        self.signals = SignalDict()
+        self.slots   = []
+        self.pending = set()
 
     def reset(self):
-        self.timeline.reset()
         for signal, index in self.signals.items():
             self.slots[index].curr = self.slots[index].next = signal.reset
         self.pending.clear()
@@ -230,114 +226,25 @@ class _SimulatorState:
         return converged
 
 
-class Simulator:
+class Simulator(SimulatorCore):
     def __init__(self, fragment):
+        super().__init__(fragment)
         self._state = _SimulatorState()
-        self._fragment = Fragment.get(fragment, platform=None).prepare()
-        self._processes = _FragmentCompiler(self._state)(self._fragment)
-        self._clocked = set()
+        self._processes.update(_FragmentCompiler(self._state)(self._fragment))
         self._waveform_writers = []
 
-    def _check_process(self, process):
-        if not (inspect.isgeneratorfunction(process) or inspect.iscoroutinefunction(process)):
-            raise TypeError("Cannot add a process {!r} because it is not a generator function"
-                            .format(process))
-        return process
-
     def _add_coroutine_process(self, process, *, default_cmd):
-        self._processes.add(PyCoroProcess(self._state, self._fragment.domains, process,
+        self._processes.add(PyCoroProcess(self._state, self._timeline,
+                                          self._fragment.domains, process,
                                           default_cmd=default_cmd))
 
-    def add_process(self, process):
-        process = self._check_process(process)
-        def wrapper():
-            # Only start a bench process after comb settling, so that the reset values are correct.
-            yield Settle()
-            yield from process()
-        self._add_coroutine_process(wrapper, default_cmd=None)
-
-    def add_sync_process(self, process, *, domain="sync"):
-        process = self._check_process(process)
-        def wrapper():
-            # Only start a sync process after the first clock edge (or reset edge, if the domain
-            # uses an asynchronous reset). This matches the behavior of synchronous FFs.
-            yield Tick(domain)
-            yield from process()
-        return self._add_coroutine_process(wrapper, default_cmd=Tick(domain))
-
-    def add_clock(self, period, *, phase=None, domain="sync", if_exists=False):
-        """Add a clock process.
-
-        Adds a process that drives the clock signal of ``domain`` at a 50% duty cycle.
-
-        Arguments
-        ---------
-        period : float
-            Clock period. The process will toggle the ``domain`` clock signal every ``period / 2``
-            seconds.
-        phase : None or float
-            Clock phase. The process will wait ``phase`` seconds before the first clock transition.
-            If not specified, defaults to ``period / 2``.
-        domain : str or ClockDomain
-            Driven clock domain. If specified as a string, the domain with that name is looked up
-            in the root fragment of the simulation.
-        if_exists : bool
-            If ``False`` (the default), raise an error if the driven domain is specified as
-            a string and the root fragment does not have such a domain. If ``True``, do nothing
-            in this case.
-        """
-        if isinstance(domain, ClockDomain):
-            pass
-        elif domain in self._fragment.domains:
-            domain = self._fragment.domains[domain]
-        elif if_exists:
-            return
-        else:
-            raise ValueError("Domain {!r} is not present in simulation"
-                             .format(domain))
-        if domain in self._clocked:
-            raise ValueError("Domain {!r} already has a clock driving it"
-                             .format(domain.name))
-
-        half_period = period / 2
-        if phase is None:
-            # By default, delay the first edge by half period. This causes any synchronous activity
-            # to happen at a non-zero time, distinguishing it from the reset values in the waveform
-            # viewer.
-            phase = half_period
-        def clk_process():
-            yield Passive()
-            yield Delay(phase)
-            # Behave correctly if the process is added after the clock signal is manipulated, or if
-            # its reset state is high.
-            initial = (yield domain.clk)
-            steps = (
-                domain.clk.eq(~initial),
-                Delay(half_period),
-                domain.clk.eq(initial),
-                Delay(half_period),
-            )
-            while True:
-                yield from iter(steps)
-        self._add_coroutine_process(clk_process, default_cmd=None)
-        self._clocked.add(domain)
-
     def reset(self):
-        """Reset the simulation.
-
-        Assign the reset value to every signal in the simulation, and restart every user process.
-        """
         self._state.reset()
         for process in self._processes:
             process.reset()
 
     def _real_step(self):
-        """Step the simulation.
-
-        Run every process and commit changes until a fixed point is reached. If there is
-        an unstable combinatorial loop, this function will never return.
-        """
-        # Performs the two phases of a delta cycle in a loop:
+        # Perform the two phases of a delta cycle in a loop:
         converged = False
         while not converged:
             # 1. eval: run and suspend every non-waiting process once, queueing signal changes
@@ -353,47 +260,6 @@ class Simulator:
 
             # 2. commit: apply every queued signal change, waking up any waiting processes
             converged = self._state.commit()
-
-    # TODO(nmigen-0.4): replace with _real_step
-    @deprecated("instead of `sim.step()`, use `sim.advance()`")
-    def step(self):
-        return self.advance()
-
-    def advance(self):
-        """Advance the simulation.
-
-        Run every process and commit changes until a fixed point is reached, then advance time
-        to the closest deadline (if any). If there is an unstable combinatorial loop,
-        this function will never return.
-
-        Returns ``True`` if there are any active processes, ``False`` otherwise.
-        """
-        self._real_step()
-        self._state.timeline.advance()
-        return any(not process.passive for process in self._processes)
-
-    def run(self):
-        """Run the simulation while any processes are active.
-
-        Processes added with :meth:`add_process` and :meth:`add_sync_process` are initially active,
-        and may change their status using the ``yield Passive()`` and ``yield Active()`` commands.
-        Processes compiled from HDL and added with :meth:`add_clock` are always passive.
-        """
-        while self.advance():
-            pass
-
-    def run_until(self, deadline, *, run_passive=False):
-        """Run the simulation until it advances to ``deadline``.
-
-        If ``run_passive`` is ``False``, the simulation also stops when there are no active
-        processes, similar to :meth:`run`. Otherwise, the simulation will stop only after it
-        advances to or past ``deadline``.
-
-        If the simulation stops advancing, this function will never return.
-        """
-        assert self._state.timeline.now <= deadline
-        while (self.advance() or run_passive) and self._state.timeline.now < deadline:
-            pass
 
     @contextmanager
     def write_vcd(self, vcd_file, gtkw_file=None, *, traces=()):
