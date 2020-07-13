@@ -30,7 +30,7 @@ def _convert_rtlil_text(rtlil_text, black_boxes, *, src_loc_at=0):
             script.append("read_ilang <<rtlil\n{}\nrtlil".format(box_source))
     script.append("read_ilang <<rtlil\n{}\nrtlil".format(rtlil_text))
     script.append("delete w:$verilog_initial_trigger")
-    script.append("write_cxxrtl")
+    script.append("write_cxxrtl -Og")
 
     return _find_yosys().run(["-q", "-"], "\n".join(script), src_loc_at=1 + src_loc_at)
 
