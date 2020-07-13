@@ -4,10 +4,10 @@ import os.path
 from distutils import ccompiler
 
 
-__all__ = ["build"]
+__all__ = ["build_cxx"]
 
 
-def build(*, cxx_sources, output_name, include_dirs, macros):
+def build_cxx(*, cxx_sources, output_name, include_dirs, macros):
     build_dir = tempfile.TemporaryDirectory(prefix="nmigen_cxx_")
 
     cwd = os.getcwd()

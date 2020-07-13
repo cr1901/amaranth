@@ -1,6 +1,7 @@
 from enum import IntEnum
 from ctypes import (cdll, Structure, POINTER, CFUNCTYPE,
-                    c_int, c_size_t, c_uint32, c_uint64, c_void_p, c_char_p)
+                    c_int, c_size_t, c_uint32, c_uint64, c_void_p, c_char_p,
+                    byref)
 
 
 __all__ = []
@@ -34,8 +35,8 @@ class cxxrtl_object(Structure):
         ("lsb_at",  c_size_t),
         ("depth",   c_size_t),
         ("zero_at", c_size_t),
-        ("curr",    POINTER(c_uint32)),
-        ("next",    POINTER(c_uint32)),
+        ("_curr",   POINTER(c_uint32)),
+        ("_next",   POINTER(c_uint32)),
     ]
 
     @property
@@ -44,7 +45,37 @@ class cxxrtl_object(Structure):
 
     @property
     def chunks(self):
-        return ((self.width + 31) / 32) * self.depth
+        return ((self.width + 31) // 32) * self.depth
+
+    @property
+    def curr(self):
+        value = 0
+        for chunk in range(self.chunks):
+            value <<= 32
+            value |= self._curr[chunk]
+        return value << self.lsb_at
+
+    @curr.setter
+    def curr(self, value):
+        value = (value >> self.lsb_at) & ((1 << self.width) - 1)
+        for chunk in range(self.chunks):
+            self._curr[chunk] = value & 0xffffffff
+            value >>= 32
+
+    @property
+    def next(self):
+        value = 0
+        for chunk in range(self.chunks):
+            value <<= 32
+            value |= self._next[chunk]
+        return value << self.lsb_at
+
+    @next.setter
+    def next(self, value):
+        value = (value >> self.lsb_at) & ((1 << self.width) - 1)
+        for chunk in range(self.chunks):
+            self._next[chunk] = value & 0xffffffff
+            value >>= 32
 
 
 cxxrtl_object_p = POINTER(cxxrtl_object)
@@ -75,13 +106,27 @@ class cxxrtl_library:
         self.destroy.argtypes = [cxxrtl_handle]
         self.destroy.restype = None
 
+        self.eval = library.cxxrtl_eval
+        self.eval.argtypes = [cxxrtl_handle]
+        self.eval.restype = c_int
+
+        self.commit = library.cxxrtl_commit
+        self.commit.argtypes = [cxxrtl_handle]
+        self.commit.restype = c_int
+
         self.step = library.cxxrtl_step
         self.step.argtypes = [cxxrtl_handle]
         self.step.restype = None
 
-        self.get_parts = library.cxxrtl_get_parts
-        self.get_parts.argtypes = [cxxrtl_handle]
-        self.get_parts.restype = cxxrtl_object_p
+        _get_parts = library.cxxrtl_get_parts
+        _get_parts.argtypes = [cxxrtl_handle, c_char_p, POINTER(c_size_t)]
+        _get_parts.restype = cxxrtl_object_p
+        def get_parts(handle, name):
+            count = c_size_t()
+            parts = _get_parts(handle, name, byref(count))
+            if parts:
+                return [parts[n] for n in range(count.value)]
+        self.get_parts = get_parts
 
         self.enum = library.cxxrtl_enum
         self.enum.argtypes = [cxxrtl_handle, c_void_p, cxxrtl_enum_callback_fn]
