@@ -281,11 +281,11 @@ class Simulator(SimulatorCore):
         traces : iterable of Signal
             Signals to display traces for.
         """
-        if self._state.timeline.now != 0.0:
+        if self._timeline.now != 0.0:
             raise ValueError("Cannot start writing waveforms after advancing simulation time")
         waveform_writer = _VCDWaveformWriter(self._fragment,
             vcd_file=vcd_file, gtkw_file=gtkw_file, traces=traces)
         self._waveform_writers.append(waveform_writer)
         yield
-        waveform_writer.close(self._state.timeline.now)
+        waveform_writer.close(self._timeline.now)
         self._waveform_writers.remove(waveform_writer)
