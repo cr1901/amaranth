@@ -1,4 +1,5 @@
 import os
+from contextlib import contextmanager
 
 from ..hdl import *
 from ..hdl.ast import SignalDict
@@ -101,6 +102,7 @@ class Simulator(SimulatorCore):
         # cxxlib = cxxrtl_library("./sim.so")
 
         self._state = _SimulatorState(cxxlib, name_map)
+        self._vcd_writers = []
 
     def _add_coroutine_process(self, process, *, default_cmd):
         self._processes.add(PyCoroProcess(self._state, self._timeline,
@@ -109,6 +111,7 @@ class Simulator(SimulatorCore):
 
     def reset(self):
         self._state.reset()
+        self._timeline.reset()
         for process in self._processes:
             process.reset()
 
@@ -122,3 +125,22 @@ class Simulator(SimulatorCore):
             self._state.eval()
             if not self._state.commit():
                 break
+
+        for vcd_writer, vcd_file in self._vcd_writers:
+            self._state.cxxlib.vcd_sample(vcd_writer, int(self._timeline.now * 10 ** 10))
+            vcd_file.write(self._state.cxxlib.vcd_read(vcd_writer))
+
+    @contextmanager
+    def write_vcd(self, vcd_file):
+        if self._timeline.now != 0.0:
+            raise ValueError("Cannot start writing waveforms after advancing simulation time")
+        with open(vcd_file, "wb") as vcd_file:
+            try:
+                vcd_writer = self._state.cxxlib.vcd_create()
+                self._vcd_writers.append((vcd_writer, vcd_file))
+                self._state.cxxlib.vcd_timescale(vcd_writer, 100, b"ps")
+                self._state.cxxlib.vcd_add_from(vcd_writer, self._state.handle)
+                yield
+            finally:
+                self._vcd_writers.remove((vcd_writer, vcd_file))
+                self._state.cxxlib.vcd_destroy(vcd_writer)

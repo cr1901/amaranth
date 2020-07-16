@@ -1,7 +1,7 @@
 from enum import IntEnum
 from ctypes import (cdll, Structure, POINTER, CFUNCTYPE,
                     c_int, c_size_t, c_uint32, c_uint64, c_void_p, c_char_p,
-                    byref)
+                    byref, string_at)
 
 
 __all__ = []
@@ -140,8 +140,12 @@ class cxxrtl_library:
         self.vcd_destroy.argtypes = [cxxrtl_vcd]
         self.vcd_destroy.restype = None
 
+        self.vcd_timescale = library.cxxrtl_vcd_timescale
+        self.vcd_timescale.argtypes = [cxxrtl_vcd, c_int, c_char_p]
+        self.vcd_timescale.restype = None
+
         self.vcd_add = library.cxxrtl_vcd_add
-        self.vcd_add.argtypes = [cxxrtl_vcd, c_int, c_char_p]
+        self.vcd_add.argtypes = [cxxrtl_vcd, c_char_p, cxxrtl_object_p]
         self.vcd_add.restype = None
 
         self.vcd_add_from = library.cxxrtl_vcd_add_from
@@ -160,6 +164,12 @@ class cxxrtl_library:
         self.vcd_sample.argtypes = [cxxrtl_vcd, c_uint64]
         self.vcd_sample.restype = None
 
-        self.vcd_read = library.cxxrtl_vcd_read
-        self.vcd_read.argtypes = [cxxrtl_vcd, POINTER(c_char_p), POINTER(c_size_t)]
-        self.vcd_read.restype = None
+        _vcd_read = library.cxxrtl_vcd_read
+        _vcd_read.argtypes = [cxxrtl_vcd, POINTER(c_char_p), POINTER(c_size_t)]
+        _vcd_read.restype = None
+        def vcd_read(vcd):
+            data = c_char_p()
+            size = c_size_t()
+            _vcd_read(vcd, byref(data), byref(size))
+            return string_at(data.value, size.value)
+        self.vcd_read = vcd_read

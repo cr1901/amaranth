@@ -255,7 +255,7 @@ class Simulator(SimulatorCore):
 
             for waveform_writer in self._waveform_writers:
                 for signal_state in self._state.pending:
-                    waveform_writer.update(self._state.timeline.now,
+                    waveform_writer.update(self._timeline.now,
                         signal_state.signal, signal_state.next)
 
             # 2. commit: apply every queued signal change, waking up any waiting processes
