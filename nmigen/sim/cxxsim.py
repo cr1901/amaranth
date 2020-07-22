@@ -116,13 +116,13 @@ class Simulator(SimulatorCore):
             process.reset()
 
     def _real_step(self):
-        for process in self._processes:
-            if process.runnable:
-                process.runnable = False
-                process.run()
-
         while True:
             self._state.eval()
+            for process in self._processes:
+                if process.runnable:
+                    process.runnable = False
+                    process.run()
+
             if not self._state.commit():
                 break
 
